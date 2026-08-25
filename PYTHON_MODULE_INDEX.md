@@ -4,9 +4,9 @@
 
 - Declared source root: `src`
 - Packaging source of truth: `pyproject.toml`
-- Importable production units: 4
-- Indexed production units: 4
-- Source/index parity: 4/4
+- Importable production units: 5
+- Indexed production units: 5
+- Source/index parity: 5/5
 - Package data: `src/generic_rag/py.typed`
 - Locked verification owner: `.github/workflows/ci.yml` (supporting workflow,
   not an importable unit)
@@ -41,9 +41,9 @@
 - Owned state or external resources: none.
 - Material side effects: none.
 - Verification: `tests/test_errors.py`, `tests/test_package_boundaries.py`,
-  `tests/support/clean_import_probe.py`, and the locked CI import and boundary
-  checks.
-- Documentation: `docs/api.md`.
+  `tests/test_projection.py`, `tests/support/clean_import_probe.py`, and the
+  locked CI import and boundary checks.
+- Documentation: `docs/api.md` and `docs/projection.md`.
 
 ## `generic_rag.contracts`
 
@@ -53,9 +53,12 @@
 - Supported public imports: `DocumentKey`, `DocumentIdentity`, `Document`,
   `FragmentIdentity`, `Fragment`, `EmbeddingIdentity`, `EmbeddingVector`,
   `VectorRecord`, `ProjectionIdentity`, `ProjectionCheckpoint`,
-  `ProjectionOutcome`, `ProjectionReceipt`, `RetrievalQuery`,
-  `RetrievalOutcome`, `RetrievalHit`, and `RetrievalResult` from
-  `generic_rag.contracts`.
+  `ProjectionOutcome`, `ProjectionReceipt`, `ChunkingPolicy`,
+  `ProjectionLimits`, `ProjectionRequest`, `ProjectionManifestEntry`,
+  `ProjectionManifest`, `ProjectionStateAvailability`,
+  `ProjectionStateSnapshot`, `ProjectionStateStatus`, `ProjectionResult`,
+  `RetrievalQuery`, `RetrievalOutcome`, `RetrievalHit`, and `RetrievalResult`
+  from `generic_rag.contracts`.
 - Re-exports: exactly the names in the module's `__all__`; none from the package
   root.
 - Direct internal dependencies: `generic_rag.errors`.
@@ -63,11 +66,12 @@
   values.
 - Material side effects: none.
 - Verification: `tests/test_contract_values.py`,
-  `tests/test_projection_contracts.py`, `tests/test_retrieval_contracts.py`,
-  `tests/test_package_boundaries.py`, `tests/support/clean_import_probe.py`,
-  `tests/support/verify_artifacts.py`, and the locked CI import, boundary, and
-  artifact checks.
-- Documentation: `docs/api.md` and `docs/security-and-privacy.md`.
+  `tests/test_projection_contracts.py`, `tests/test_projection.py`,
+  `tests/test_retrieval_contracts.py`, `tests/test_package_boundaries.py`,
+  `tests/support/clean_import_probe.py`, `tests/support/verify_artifacts.py`, and
+  the locked CI import, boundary, and artifact checks.
+- Documentation: `docs/api.md`, `docs/projection.md`, and
+  `docs/security-and-privacy.md`.
 
 ## `generic_rag.ports`
 
@@ -75,7 +79,8 @@
 - Responsibility: define synchronous injected collaborator interfaces and
   explicit caller-owned borrowing semantics.
 - Supported public imports: `Borrowed`, `Embedder`, `VectorIndexWriter`,
-  `VectorIndexReader`, and `LexicalRetriever` from `generic_rag.ports`.
+  `VectorIndexResetter`, `VectorIndexReader`, and `LexicalRetriever` from
+  `generic_rag.ports`.
 - Re-exports: exactly the names in the module's `__all__`; none from the package
   root.
 - Direct internal dependencies: `generic_rag.contracts`.
@@ -83,7 +88,33 @@
   owns, acquires, releases, closes, or shuts down the resource.
 - Material side effects: none.
 - Verification: `tests/test_ports.py`, `tests/test_package_boundaries.py`,
-  `tests/support/clean_import_probe.py`, and the locked CI import and boundary
+  `tests/test_projection.py`, `tests/support/clean_import_probe.py`, and the
+  locked CI import and boundary checks.
+- Documentation: `docs/api.md`, `docs/lifecycle.md`, `docs/projection.md`, and
+  `docs/security-and-privacy.md`.
+
+## `generic_rag.projection`
+
+- Source: `src/generic_rag/projection.py`
+- Responsibility: deterministically plan and synchronously execute bounded,
+  revision-aware document projection against caller-supplied state.
+- Supported public imports: `ProjectionFailureStage`, `ProjectionStateError`,
+  `ProjectionOperationError`, `project_documents`, and `rebuild_projection`
+  from `generic_rag.projection`.
+- Re-exports: exactly the names in the module's `__all__`; none from the package
+  root.
+- Direct internal dependencies: `generic_rag.contracts`, `generic_rag.errors`,
+  and `generic_rag.ports`.
+- Owned state or external resources: none; planning state is immutable and
+  local to each call, while every embedder, writer, and resetter remains
+  caller-owned through `Borrowed`.
+- Material side effects: none at import time. At explicit workflow call time it
+  may invoke the borrowed embedder and vector writer, and full rebuild may
+  invoke the borrowed corpus resetter; it performs no persistence, network,
+  retry, acquisition, release, or lifecycle action itself.
+- Verification: `tests/test_projection.py`, `tests/test_package_boundaries.py`,
+  `tests/support/clean_import_probe.py`, `tests/support/verify_artifacts.py`, and
+  the locked CI test, lint, type, build, clean-install, import, and artifact
   checks.
-- Documentation: `docs/api.md`, `docs/lifecycle.md`, and
+- Documentation: `docs/projection.md`, `docs/api.md`, `docs/lifecycle.md`, and
   `docs/security-and-privacy.md`.

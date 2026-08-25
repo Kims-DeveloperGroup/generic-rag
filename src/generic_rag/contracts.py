@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import re
 from dataclasses import dataclass
 from enum import StrEnum
 from math import isfinite
@@ -21,11 +22,22 @@ __all__ = (
     "ProjectionCheckpoint",
     "ProjectionOutcome",
     "ProjectionReceipt",
+    "ChunkingPolicy",
+    "ProjectionLimits",
+    "ProjectionRequest",
+    "ProjectionManifestEntry",
+    "ProjectionManifest",
+    "ProjectionStateAvailability",
+    "ProjectionStateSnapshot",
+    "ProjectionStateStatus",
+    "ProjectionResult",
     "RetrievalQuery",
     "RetrievalOutcome",
     "RetrievalHit",
     "RetrievalResult",
 )
+
+_SOURCE_DIGEST = re.compile(r"sha256:[0-9a-f]{64}")
 
 
 def _require_exact_type(name: str, value: object, expected: type[object]) -> None:
@@ -308,6 +320,239 @@ class ProjectionReceipt:
                 raise ContractValidationError(
                     "failed receipts must not claim a checkpoint"
                 )
+
+
+@dataclass(frozen=True, slots=True)
+class ChunkingPolicy:
+    """Code-point chunk size and overlap used by one projection."""
+
+    max_fragment_codepoints: int
+    overlap_codepoints: int
+
+    def __post_init__(self) -> None:
+        maximum = _require_positive_integer(
+            "max_fragment_codepoints",
+            self.max_fragment_codepoints,
+        )
+        overlap = _require_nonnegative_integer(
+            "overlap_codepoints",
+            self.overlap_codepoints,
+        )
+        if overlap >= maximum:
+            raise ContractValidationError(
+                "overlap_codepoints must be smaller than max_fragment_codepoints"
+            )
+
+
+@dataclass(frozen=True, slots=True)
+class ProjectionLimits:
+    """Independent document, text, and embedding-batch projection bounds."""
+
+    max_documents: int
+    max_document_codepoints: int
+    max_embedding_batch_size: int
+
+    def __post_init__(self) -> None:
+        _require_positive_integer("max_documents", self.max_documents)
+        _require_positive_integer(
+            "max_document_codepoints",
+            self.max_document_codepoints,
+        )
+        _require_positive_integer(
+            "max_embedding_batch_size",
+            self.max_embedding_batch_size,
+        )
+
+
+@dataclass(frozen=True, slots=True)
+class ProjectionRequest:
+    """A complete bounded canonical target projection for one corpus."""
+
+    corpus_id: str
+    projection: ProjectionIdentity
+    chunking: ChunkingPolicy
+    limits: ProjectionLimits
+    documents: tuple[Document, ...]
+
+    def __post_init__(self) -> None:
+        _require_nonblank_string("corpus_id", self.corpus_id)
+        _require_exact_type("projection", self.projection, ProjectionIdentity)
+        _require_exact_type("chunking", self.chunking, ChunkingPolicy)
+        _require_exact_type("limits", self.limits, ProjectionLimits)
+        _require_exact_type("documents", self.documents, tuple)
+        if len(self.documents) > self.limits.max_documents:
+            raise ContractValidationError("documents must not exceed max_documents")
+
+        keys: set[DocumentKey] = set()
+        canonical: list[Document] = []
+        for index, document in enumerate(self.documents):
+            _require_exact_type(f"documents[{index}]", document, Document)
+            if document.identity.key.corpus_id != self.corpus_id:
+                raise ContractValidationError(
+                    "every document corpus_id must match the request corpus_id"
+                )
+            if len(document.text) > self.limits.max_document_codepoints:
+                raise ContractValidationError(
+                    "document text must not exceed max_document_codepoints"
+                )
+            if document.identity.key in keys:
+                raise ContractValidationError(
+                    "documents must have unique stable document keys"
+                )
+            keys.add(document.identity.key)
+            canonical.append(document)
+        canonical.sort(key=lambda document: document.identity.key.document_id)
+        object.__setattr__(self, "documents", tuple(canonical))
+
+
+@dataclass(frozen=True, slots=True)
+class ProjectionManifestEntry:
+    """One projected document revision, source digest, and fragment count."""
+
+    document: DocumentIdentity
+    source_digest: str
+    fragment_count: int
+
+    def __post_init__(self) -> None:
+        _require_exact_type("document", self.document, DocumentIdentity)
+        _require_exact_type("source_digest", self.source_digest, str)
+        if _SOURCE_DIGEST.fullmatch(self.source_digest) is None:
+            raise ContractValidationError(
+                "source_digest must be lowercase sha256:<64hex>"
+            )
+        _require_nonnegative_integer("fragment_count", self.fragment_count)
+
+
+@dataclass(frozen=True, slots=True)
+class ProjectionManifest:
+    """A complete canonical successful projection checkpoint manifest."""
+
+    corpus_id: str
+    projection: ProjectionIdentity
+    chunking: ChunkingPolicy
+    entries: tuple[ProjectionManifestEntry, ...]
+    checkpoint: ProjectionCheckpoint
+
+    def __post_init__(self) -> None:
+        _require_nonblank_string("corpus_id", self.corpus_id)
+        _require_exact_type("projection", self.projection, ProjectionIdentity)
+        _require_exact_type("chunking", self.chunking, ChunkingPolicy)
+        _require_exact_type("entries", self.entries, tuple)
+        _require_exact_type("checkpoint", self.checkpoint, ProjectionCheckpoint)
+        if self.checkpoint.corpus_id != self.corpus_id:
+            raise ContractValidationError(
+                "checkpoint corpus_id must match the manifest corpus_id"
+            )
+        if self.checkpoint.projection != self.projection:
+            raise ContractValidationError(
+                "checkpoint projection must match the manifest projection"
+            )
+
+        keys: set[DocumentKey] = set()
+        canonical: list[ProjectionManifestEntry] = []
+        for index, entry in enumerate(self.entries):
+            _require_exact_type(f"entries[{index}]", entry, ProjectionManifestEntry)
+            if entry.document.key.corpus_id != self.corpus_id:
+                raise ContractValidationError(
+                    "every manifest entry corpus_id must match the manifest corpus_id"
+                )
+            if entry.document.key in keys:
+                raise ContractValidationError(
+                    "manifest entries must have unique stable document keys"
+                )
+            keys.add(entry.document.key)
+            canonical.append(entry)
+        canonical.sort(key=lambda entry: entry.document.key.document_id)
+        object.__setattr__(self, "entries", tuple(canonical))
+
+
+class ProjectionStateAvailability(StrEnum):
+    """Structural availability of a caller-supplied projection snapshot."""
+
+    MISSING = "missing"
+    PRESENT = "present"
+    CORRUPT = "corrupt"
+
+    @classmethod
+    def _missing_(cls, value: object) -> None:
+        raise ContractValidationError(f"{cls.__name__} value is not a defined member")
+
+
+@dataclass(frozen=True, slots=True)
+class ProjectionStateSnapshot:
+    """Caller-supplied projection state without package-owned persistence."""
+
+    availability: ProjectionStateAvailability
+    manifest: ProjectionManifest | None
+
+    def __post_init__(self) -> None:
+        _require_exact_type(
+            "availability",
+            self.availability,
+            ProjectionStateAvailability,
+        )
+        if self.availability is ProjectionStateAvailability.PRESENT:
+            _require_exact_type("manifest", self.manifest, ProjectionManifest)
+        elif self.manifest is not None:
+            raise ContractValidationError(
+                "missing and corrupt state snapshots must not contain a manifest"
+            )
+
+
+class ProjectionStateStatus(StrEnum):
+    """Compatibility of supplied state with one complete projection target."""
+
+    MISSING = "missing"
+    CURRENT = "current"
+    STALE = "stale"
+    CORRUPT = "corrupt"
+    SCHEMA_MISMATCH = "schema_mismatch"
+    EMBEDDING_MISMATCH = "embedding_mismatch"
+
+    @classmethod
+    def _missing_(cls, value: object) -> None:
+        raise ContractValidationError(f"{cls.__name__} value is not a defined member")
+
+
+@dataclass(frozen=True, slots=True)
+class ProjectionResult:
+    """One completely successful projection result and authoritative manifest."""
+
+    status_before: ProjectionStateStatus
+    receipt: ProjectionReceipt
+    manifest: ProjectionManifest
+
+    def __post_init__(self) -> None:
+        _require_exact_type("status_before", self.status_before, ProjectionStateStatus)
+        _require_exact_type("receipt", self.receipt, ProjectionReceipt)
+        _require_exact_type("manifest", self.manifest, ProjectionManifest)
+        if self.receipt.outcome not in (
+            ProjectionOutcome.COMPLETED,
+            ProjectionOutcome.UNCHANGED,
+        ):
+            raise ContractValidationError(
+                "projection results require a completed or unchanged receipt"
+            )
+        if self.receipt.corpus_id != self.manifest.corpus_id:
+            raise ContractValidationError(
+                "receipt corpus_id must match the result manifest"
+            )
+        if self.receipt.projection != self.manifest.projection:
+            raise ContractValidationError(
+                "receipt projection must match the result manifest"
+            )
+        if self.receipt.checkpoint != self.manifest.checkpoint:
+            raise ContractValidationError(
+                "receipt checkpoint must equal the result manifest checkpoint"
+            )
+        if self.receipt.outcome is ProjectionOutcome.UNCHANGED and (
+            self.status_before is not ProjectionStateStatus.CURRENT
+            or self.receipt.attempted_documents != 0
+            or self.receipt.completed_documents != 0
+        ):
+            raise ContractValidationError(
+                "unchanged results require current state and zero document attempts"
+            )
 
 
 @dataclass(frozen=True, slots=True)

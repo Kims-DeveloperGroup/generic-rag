@@ -16,6 +16,7 @@ import generic_rag
 import generic_rag.contracts as contracts
 import generic_rag.errors as errors
 import generic_rag.ports as ports
+import generic_rag.projection as projection
 
 _PROJECT_ROOT = Path(__file__).resolve().parents[1]
 _SOURCE_ROOT = _PROJECT_ROOT / "src"
@@ -26,12 +27,18 @@ _EXPECTED_SOURCES = {
     "generic_rag.contracts": "src/generic_rag/contracts.py",
     "generic_rag.errors": "src/generic_rag/errors.py",
     "generic_rag.ports": "src/generic_rag/ports.py",
+    "generic_rag.projection": "src/generic_rag/projection.py",
 }
 _EXPECTED_DEPENDENCIES = {
     "generic_rag": set(),
     "generic_rag.contracts": {"generic_rag.errors"},
     "generic_rag.errors": set(),
     "generic_rag.ports": {"generic_rag.contracts"},
+    "generic_rag.projection": {
+        "generic_rag.contracts",
+        "generic_rag.errors",
+        "generic_rag.ports",
+    },
 }
 _EXPECTED_EXPORTS = {
     "generic_rag": (),
@@ -54,6 +61,15 @@ _EXPECTED_EXPORTS = {
         "ProjectionCheckpoint",
         "ProjectionOutcome",
         "ProjectionReceipt",
+        "ChunkingPolicy",
+        "ProjectionLimits",
+        "ProjectionRequest",
+        "ProjectionManifestEntry",
+        "ProjectionManifest",
+        "ProjectionStateAvailability",
+        "ProjectionStateSnapshot",
+        "ProjectionStateStatus",
+        "ProjectionResult",
         "RetrievalQuery",
         "RetrievalOutcome",
         "RetrievalHit",
@@ -63,8 +79,16 @@ _EXPECTED_EXPORTS = {
         "Borrowed",
         "Embedder",
         "VectorIndexWriter",
+        "VectorIndexResetter",
         "VectorIndexReader",
         "LexicalRetriever",
+    ),
+    "generic_rag.projection": (
+        "ProjectionFailureStage",
+        "ProjectionStateError",
+        "ProjectionOperationError",
+        "project_documents",
+        "rebuild_projection",
     ),
 }
 
@@ -150,6 +174,7 @@ class PackageBoundaryTests(unittest.TestCase):
             "generic_rag.errors": errors,
             "generic_rag.contracts": contracts,
             "generic_rag.ports": ports,
+            "generic_rag.projection": projection,
         }
 
         for module_name, expected_exports in _EXPECTED_EXPORTS.items():
@@ -164,6 +189,7 @@ class PackageBoundaryTests(unittest.TestCase):
             *_EXPECTED_EXPORTS["generic_rag.errors"],
             *_EXPECTED_EXPORTS["generic_rag.contracts"],
             *_EXPECTED_EXPORTS["generic_rag.ports"],
+            *_EXPECTED_EXPORTS["generic_rag.projection"],
         ):
             with self.subTest(root_reexport=name):
                 self.assertFalse(hasattr(generic_rag, name))
@@ -339,6 +365,8 @@ class PackageBoundaryTests(unittest.TestCase):
                             "-B",
                             str(_CLEAN_IMPORT_PROBE),
                             module_name,
+                            "--source-root",
+                            str(_SOURCE_ROOT),
                         ),
                         cwd=working_directory,
                         env=environment,

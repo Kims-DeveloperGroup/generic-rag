@@ -4,9 +4,10 @@ from __future__ import annotations
 
 import inspect
 import unittest
+from collections.abc import Callable
 from dataclasses import FrozenInstanceError, fields
 from types import TracebackType
-from typing import get_type_hints
+from typing import cast, get_type_hints
 
 import generic_rag.ports as ports
 from generic_rag.contracts import (
@@ -24,6 +25,7 @@ from generic_rag.ports import (
     Embedder,
     LexicalRetriever,
     VectorIndexReader,
+    VectorIndexResetter,
     VectorIndexWriter,
 )
 
@@ -105,6 +107,14 @@ class _FakeVectorWriter:
 
     def delete_document(self, document: DocumentKey, /) -> None:
         self.deletions.append(document)
+
+
+class _FakeVectorResetter:
+    def __init__(self) -> None:
+        self.corpora: list[str] = []
+
+    def reset_corpus(self, corpus_id: str, /) -> None:
+        self.corpora.append(corpus_id)
 
 
 class _FakeVectorReader:
@@ -189,6 +199,7 @@ class PortContractTests(unittest.TestCase):
             "Borrowed",
             "Embedder",
             "VectorIndexWriter",
+            "VectorIndexResetter",
             "VectorIndexReader",
             "LexicalRetriever",
         )
@@ -201,12 +212,14 @@ class PortContractTests(unittest.TestCase):
     def test_protocols_are_runtime_checkable_structural_shapes(self) -> None:
         self.assertIsInstance(_FakeEmbedder(), Embedder)
         self.assertIsInstance(_FakeVectorWriter(), VectorIndexWriter)
+        self.assertIsInstance(_FakeVectorResetter(), VectorIndexResetter)
         self.assertIsInstance(_FakeVectorReader(()), VectorIndexReader)
         self.assertIsInstance(_FakeLexicalRetriever(()), LexicalRetriever)
 
         missing = _MissingMethods()
         self.assertNotIsInstance(missing, Embedder)
         self.assertNotIsInstance(missing, VectorIndexWriter)
+        self.assertNotIsInstance(missing, VectorIndexResetter)
         self.assertNotIsInstance(missing, VectorIndexReader)
         self.assertNotIsInstance(missing, LexicalRetriever)
 
@@ -235,6 +248,7 @@ class PortContractTests(unittest.TestCase):
                 ("self", "document", "records"),
             ),
             (VectorIndexWriter.delete_document, ("self", "document")),
+            (VectorIndexResetter.reset_corpus, ("self", "corpus_id")),
             (
                 VectorIndexReader.search,
                 ("self", "query", "embedding"),
@@ -280,6 +294,13 @@ class PortContractTests(unittest.TestCase):
             },
         )
         self.assertEqual(
+            get_type_hints(VectorIndexResetter.reset_corpus),
+            {
+                "corpus_id": str,
+                "return": type(None),
+            },
+        )
+        self.assertEqual(
             get_type_hints(VectorIndexReader.search),
             {
                 "query": RetrievalQuery,
@@ -298,6 +319,7 @@ class PortContractTests(unittest.TestCase):
         for protocol in (
             Embedder,
             VectorIndexWriter,
+            VectorIndexResetter,
             VectorIndexReader,
             LexicalRetriever,
         ):
@@ -339,6 +361,14 @@ class PortContractTests(unittest.TestCase):
         wrong_document = _document_identity(document_id="other")
         with self.assertRaises(AssertionError):
             writer.replace_document(wrong_document, records)
+
+    def test_resetter_witness_removes_one_exact_corpus_and_returns_none(self) -> None:
+        resetter = _FakeVectorResetter()
+
+        result = cast(Callable[[str], object], resetter.reset_corpus)(" Corpus/../A ")
+
+        self.assertIsNone(result)
+        self.assertEqual(resetter.corpora, [" Corpus/../A "])
 
     def test_reader_witnesses_preserve_rank_and_enforce_candidate_bound(self) -> None:
         ranked = (

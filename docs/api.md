@@ -1,10 +1,10 @@
 # Public API
 
-Version 0.1.0 exposes immutable values, typed error categories, and synchronous
-collaborator protocols. It does not expose projection or retrieval algorithms.
-See the [project overview](../README.md), [resource lifecycle](lifecycle.md),
-and [security and privacy boundary](security-and-privacy.md) for the surrounding
-usage contract.
+Version 0.1.0 exposes immutable values, typed error categories, synchronous
+collaborator protocols, and deterministic bounded document projection. It does
+not expose retrieval or result-composition orchestration. See the [projection
+guide](projection.md), [resource lifecycle](lifecycle.md), and [security and
+privacy boundary](security-and-privacy.md) for the surrounding usage contract.
 
 ## Import boundary
 
@@ -33,6 +33,15 @@ public symbols. Import names from their owning modules instead.
 - `ProjectionCheckpoint`
 - `ProjectionOutcome`
 - `ProjectionReceipt`
+- `ChunkingPolicy`
+- `ProjectionLimits`
+- `ProjectionRequest`
+- `ProjectionManifestEntry`
+- `ProjectionManifest`
+- `ProjectionStateAvailability`
+- `ProjectionStateSnapshot`
+- `ProjectionStateStatus`
+- `ProjectionResult`
 - `RetrievalQuery`
 - `RetrievalOutcome`
 - `RetrievalHit`
@@ -43,10 +52,20 @@ public symbols. Import names from their owning modules instead.
 - `Borrowed`
 - `Embedder`
 - `VectorIndexWriter`
+- `VectorIndexResetter`
 - `VectorIndexReader`
 - `LexicalRetriever`
 
-The package does not support importing public values from the package root.
+`generic_rag.projection` exports exactly:
+
+- `ProjectionFailureStage`
+- `ProjectionStateError`
+- `ProjectionOperationError`
+- `project_documents`
+- `rebuild_projection`
+
+The package does not support importing any of these names from the package
+root.
 
 ## Shared value rules
 
@@ -72,23 +91,41 @@ and pair order and duplicates are preserved.
 
 ## Errors
 
-`GenericRagError` is the base for the three public categories:
+The base error relationships used by projection are:
 
 ```text
 GenericRagError
 ├── ContractValidationError
 ├── CollaborationError
+│   └── ProjectionOperationError
 └── StateCompatibilityError
+    └── ProjectionStateError
 ```
 
-- `ContractValidationError` reports a violated public value invariant.
-- `CollaborationError` is reserved for a workflow that translates a
-  collaborator operation failure.
-- `StateCompatibilityError` is reserved for a workflow that detects derived
-  state with an incompatible projection identity.
+- `ContractValidationError` reports a violated public value invariant or an
+  invalid top-level workflow input.
+- `ProjectionStateError(status: ProjectionStateStatus)` reports state that an
+  incremental operation cannot use. Its exact `status` field gives the reason;
+  its message contains no state identifier.
+- `ProjectionOperationError(stage, affected_document, receipt)` translates an
+  ordinary collaborator failure or invalid collaborator return. Its message is
+  content-free. `affected_document` is a stable key for document-specific
+  failures and otherwise `None`; `receipt` is truthful `FAILED` or `PARTIAL`
+  progress, or `None` when there were zero document attempts.
 
-Version 0.1.0 has no projection or retrieval workflow that raises the latter
-two categories. `Borrowed` also leaves provider exceptions unchanged.
+The closed string enum `ProjectionFailureStage` has exact values:
+
+| Member | String value |
+| --- | --- |
+| `EMBEDDER_IDENTITY` | `"embedder_identity"` |
+| `EMBEDDING` | `"embedding"` |
+| `REPLACEMENT` | `"replacement"` |
+| `DELETION` | `"deletion"` |
+| `RESET` | `"reset"` |
+
+An ordinary collaborator exception is chained as the operation error's cause.
+An invalid identity, malformed vector result, or non-`None` command result has
+no internal cause. `KeyboardInterrupt` and `SystemExit` pass through unchanged.
 
 ## Documents and fragments
 
@@ -104,31 +141,65 @@ A fragment range is half-open, `[start, end)`, in Python Unicode code points.
 It is not measured in bytes or user-perceived grapheme clusters. For example,
 `"😀"` has one code point while `"e\u0301"` has two.
 
-The package checks that fragment text length equals the range width. Version
-0.1.0 does not retain an authoritative `Document` beside a `Fragment`, so it
-cannot verify that the text equals the indicated source slice. The caller, or
-a future projection workflow, must establish that correspondence.
+The contract checks that fragment text length equals the range width. A
+standalone fragment cannot prove that its text equals the indicated source
+slice; projection establishes that correspondence for fragments it derives.
 
 ## Embeddings and vector records
 
 | Type | Fields | Construction rules |
 | --- | --- | --- |
 | `EmbeddingIdentity` | `model_id: str`, `dimensions: int` | The model ID is nonblank and opaque; dimensions is a positive exact integer. |
-| `EmbeddingVector` | `values: tuple[float, ...]` | The tuple is exact and nonempty. Every coordinate is an exact `int` or `float`, excluding `bool`, and must convert to a finite float without overflow. Oversized integers that cannot be represented as finite floats are rejected; accepted coordinates are stored canonically as floats. |
+| `EmbeddingVector` | `values: tuple[float, ...]` | The tuple is exact and nonempty. Every coordinate is an exact `int` or `float`, excluding `bool`, and must convert to a finite float without overflow. Accepted coordinates are stored canonically as floats. |
 | `VectorRecord` | `fragment: Fragment`, `embedding: EmbeddingVector` | Both fields require their exact contract classes. |
 
-A standalone `EmbeddingVector` does not carry an `EmbeddingIdentity`. Version
-0.1.0 therefore does not compare the vector length with an identity's declared
-`dimensions`; a provider and future orchestration must satisfy that semantic
-relationship.
+A standalone `EmbeddingVector` does not carry an `EmbeddingIdentity` and does
+not itself compare length with declared dimensions. Projection validates the
+embedder identity and every returned vector's exact dimensionality and
+canonical finite-float representation.
 
-## Projection state
+## Projection request and manifest values
 
 | Type | Fields | Construction rules |
 | --- | --- | --- |
 | `ProjectionIdentity` | `schema_id: str`, `embedding: EmbeddingIdentity` | The schema ID is nonblank and opaque; embedding requires its exact class. |
-| `ProjectionCheckpoint` | `corpus_id: str`, `projection: ProjectionIdentity`, `token: str` | Corpus and token are nonblank opaque strings; projection requires its exact class. |
-| `ProjectionReceipt` | `corpus_id: str`, `projection: ProjectionIdentity`, `outcome: ProjectionOutcome`, `attempted_documents: int`, `completed_documents: int`, `checkpoint: ProjectionCheckpoint \| None` | Nested values require their exact classes; counts are nonnegative exact integers and completed cannot exceed attempted. |
+| `ChunkingPolicy` | `max_fragment_codepoints: int`, `overlap_codepoints: int` | Maximum is positive; overlap is nonnegative and smaller than maximum. |
+| `ProjectionLimits` | `max_documents: int`, `max_document_codepoints: int`, `max_embedding_batch_size: int` | All three values are positive exact integers. |
+| `ProjectionRequest` | `corpus_id: str`, `projection: ProjectionIdentity`, `chunking: ChunkingPolicy`, `limits: ProjectionLimits`, `documents: tuple[Document, ...]` | Documents must match the corpus, have unique stable keys, and remain within the count and per-document text caps. They are canonicalized by opaque `document_id`. |
+| `ProjectionManifestEntry` | `document: DocumentIdentity`, `source_digest: str`, `fragment_count: int` | Digest must be lowercase `sha256:<64hex>` and fragment count is nonnegative. |
+| `ProjectionCheckpoint` | `corpus_id: str`, `projection: ProjectionIdentity`, `token: str` | Corpus and token are nonblank; projection requires its exact class. |
+| `ProjectionManifest` | `corpus_id: str`, `projection: ProjectionIdentity`, `chunking: ChunkingPolicy`, `entries: tuple[ProjectionManifestEntry, ...]`, `checkpoint: ProjectionCheckpoint` | Entries match the corpus, have unique stable keys, and are canonicalized by `document_id`; checkpoint corpus and projection match the manifest. |
+
+The package produces manifests; the caller owns their persistence. Source
+digests, fragment IDs, and checkpoint tokens are deterministic under explicit
+v1 domains described in the [projection guide](projection.md#deterministic-projection-values).
+
+## Projection state and results
+
+`ProjectionStateAvailability` is a closed string enum:
+
+| Member | String value | Manifest rule |
+| --- | --- | --- |
+| `MISSING` | `"missing"` | Must be `None` |
+| `PRESENT` | `"present"` | Must be an exact `ProjectionManifest` |
+| `CORRUPT` | `"corrupt"` | Must be `None` |
+
+`ProjectionStateSnapshot(availability, manifest)` stores that caller-supplied
+state. Projection evaluates it to a closed `ProjectionStateStatus`:
+
+| Member | String value | Meaning |
+| --- | --- | --- |
+| `MISSING` | `"missing"` | No state is available. |
+| `CURRENT` | `"current"` | Valid state exactly matches the complete target. |
+| `STALE` | `"stale"` | Valid compatible state requires mutations. |
+| `CORRUPT` | `"corrupt"` | State is declared corrupt or fails integrity/consistency checks. |
+| `SCHEMA_MISMATCH` | `"schema_mismatch"` | The schema ID differs. |
+| `EMBEDDING_MISMATCH` | `"embedding_mismatch"` | The embedding identity differs. |
+
+`ProjectionResult(status_before, receipt, manifest)` represents only complete
+success. Its receipt and manifest have the same corpus, projection, and
+checkpoint. An `UNCHANGED` result requires `CURRENT` state and zero attempted
+and completed documents.
 
 `ProjectionOutcome` is a closed string enum with these exact member values:
 
@@ -139,8 +210,9 @@ relationship.
 | `PARTIAL` | `"partial"` |
 | `FAILED` | `"failed"` |
 
-Unknown enum values raise `ContractValidationError`. A receipt can represent
-only the following truthful combinations:
+`ProjectionReceipt` has fields `corpus_id`, `projection`, `outcome`,
+`attempted_documents`, `completed_documents`, and `checkpoint`. It permits only
+these truthful combinations:
 
 | Outcome | Counts | Checkpoint |
 | --- | --- | --- |
@@ -150,7 +222,43 @@ only the following truthful combinations:
 | `FAILED` | `attempted_documents > 0` and `completed_documents == 0` | Forbidden |
 
 Any supplied checkpoint must have exactly the receipt's `corpus_id` and
-`projection`.
+`projection`. A successful workflow returns `ProjectionResult`; a failed
+workflow exposes a failed or partial receipt only through
+`ProjectionOperationError`.
+
+## Projection workflows
+
+Both public functions are synchronous and all parameters are positional-only:
+
+```python
+def project_documents(
+    request: ProjectionRequest,
+    state: ProjectionStateSnapshot,
+    embedder: Borrowed[Embedder],
+    writer: Borrowed[VectorIndexWriter],
+    /,
+) -> ProjectionResult: ...
+
+def rebuild_projection(
+    request: ProjectionRequest,
+    state: ProjectionStateSnapshot,
+    embedder: Borrowed[Embedder],
+    writer: Borrowed[VectorIndexWriter],
+    resetter: Borrowed[VectorIndexResetter],
+    /,
+) -> ProjectionResult: ...
+```
+
+`project_documents` returns without collaborator effects when state is
+`CURRENT`, applies only the canonical delta when state is `STALE`, and raises
+`ProjectionStateError` before effects for every other status.
+
+`rebuild_projection` accepts every state status and always calls the resetter.
+For a nonempty target it verifies embedder identity before reset, then replaces
+every target document. For an empty target it resets without accessing the
+embedder or writer. It is intentionally destructive and supplies no rollback
+or retry. See the [projection guide](projection.md) for the full state and
+failure matrices.
 
 ## Retrieval values
 
@@ -160,60 +268,46 @@ Any supplied checkpoint must have exactly the receipt's `corpus_id` and
 | `RetrievalHit` | `fragment: Fragment`, `rank: int` | Fragment requires its exact class and rank is a positive exact integer. There is no score field. |
 | `RetrievalResult` | `query: RetrievalQuery`, `outcome: RetrievalOutcome`, `hits: tuple[RetrievalHit, ...]`, `truncated: bool` | Nested values, the hit tuple, and the boolean require exact types. Hit count cannot exceed `query.hit_limit`. |
 
-`RetrievalOutcome` is a closed string enum with these exact member values:
-
-| Member | String value |
-| --- | --- |
-| `COMPLETE` | `"complete"` |
-| `PARTIAL` | `"partial"` |
-| `UNAVAILABLE` | `"unavailable"` |
-| `STALE` | `"stale"` |
-| `FAILED` | `"failed"` |
-
-Unknown enum values raise `ContractValidationError`. Within every result, ranks
-must be contiguous starting at one, fragment identities must be unique, and
-every fragment's corpus must match the query corpus. Fragment attributes do not
-make two otherwise identical fragment identities distinct.
-
-The outcome matrix is:
-
-| Outcome | Hits | `truncated` |
-| --- | --- | --- |
-| `COMPLETE` | Zero through `query.hit_limit` | Either boolean |
-| `PARTIAL` | One through `query.hit_limit` | Either boolean |
-| `UNAVAILABLE` | None | `False` |
-| `STALE` | None | `False` |
-| `FAILED` | None | `False` |
+`RetrievalOutcome` is a closed string enum with exact values `"complete"`,
+`"partial"`, `"unavailable"`, `"stale"`, and `"failed"`. Within every result,
+ranks are contiguous from one, fragment identities are unique, and every
+fragment belongs to the query corpus. `PARTIAL` requires at least one hit;
+`UNAVAILABLE`, `STALE`, and `FAILED` require no hits and `truncated=False`.
 
 `truncated=True` is the caller's explicit assertion that otherwise valid work
-or results were cut by the query budget. It does not imply that
-`len(hits) == query.hit_limit`; a bounded `COMPLETE` result may therefore still
-be truncated. Hits and reader ports are score-free. Raw scores from different
-providers are neither represented nor promised to be comparable.
+or results were cut by the query budget. Hits and reader ports are score-free;
+raw provider scores are neither represented nor promised comparable.
+
+These are value contracts only. Version 0.1.0 has no package retrieval,
+composition, citation, user, tool, or agent workflow.
 
 ## Collaborator ports
 
 The protocols are synchronous, injected, structurally typed, and decorated
-with `runtime_checkable`. Runtime protocol checks establish structural presence,
-not the behavioral obligations below. Version 0.1.0 provides no implementation,
-adapter, factory, provider discovery, or provider-behavior enforcement.
+with `runtime_checkable`. Runtime protocol checks establish structural
+presence, not the behavioral obligations below. Version 0.1.0 provides no
+adapter, factory, or provider discovery.
 
 | Port | Exact public operation | Semantic obligation |
 | --- | --- | --- |
 | `Embedder` | `identity: EmbeddingIdentity` | Identify the exact model used for produced vectors. |
 | `Embedder` | `embed(texts: tuple[str, ...], /) -> tuple[EmbeddingVector, ...]` | Return one same-order vector per input text, each with `identity.dimensions` coordinates; empty input returns an empty tuple. |
-| `VectorIndexWriter` | `replace_document(document: DocumentIdentity, records: tuple[VectorRecord, ...], /) -> None` | Replace all derived vectors for the document's stable key. Every record carries the supplied full `DocumentIdentity`; an empty record tuple is valid. |
+| `VectorIndexWriter` | `replace_document(document: DocumentIdentity, records: tuple[VectorRecord, ...], /) -> None` | Replace all derived vectors for the document's stable key. Every record carries the supplied full identity; an empty record tuple is valid. |
 | `VectorIndexWriter` | `delete_document(document: DocumentKey, /) -> None` | Delete every derived revision for the stable document key. |
+| `VectorIndexResetter` | `reset_corpus(corpus_id: str, /) -> None` | Remove the complete derived vector projection for the corpus. |
 | `VectorIndexReader` | `search(query: RetrievalQuery, embedding: EmbeddingVector, /) -> tuple[Fragment, ...]` | Return fragments from the requested corpus, in provider rank order, with at most `query.candidate_limit` entries. |
 | `LexicalRetriever` | `search(query: RetrievalQuery, /) -> tuple[Fragment, ...]` | Return fragments from the requested corpus, in provider rank order, with at most `query.candidate_limit` entries. |
+
+Projection enforces the embedder result rules and requires each writer or
+resetter command to return exactly `None`. It cannot enforce external storage,
+atomicity, authorization, concurrency, or lifecycle behavior.
 
 `Borrowed[T]` is the companion ownership marker, not a provider port. Its exact
 behavior is documented in [resource lifecycle](lifecycle.md).
 
-## Planned workflows
+## Planned retrieval workflow
 
-Projection orchestration is planned for Issue #3. Retrieval and composition are
-planned for Issue #4. Those future workflows are expected to accept protocol-
-compatible collaborators explicitly, but their algorithms, APIs, compatibility
-checks, exception translation, and outcome mapping are not implemented or
-promised by version 0.1.0.
+Retrieval and composition remain planned for Issue #4. The existing query,
+result, reader, and lexical contracts do not promise an implemented workflow,
+fusion algorithm, compatibility check, exception mapping, citation policy, or
+user/agent integration.

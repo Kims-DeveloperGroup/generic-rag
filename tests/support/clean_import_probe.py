@@ -161,6 +161,32 @@ def _assert_forbidden_paths_absent(paths: list[str]) -> None:
             )
 
 
+def _bootstrap_source_root(raw_source_root: str | None) -> Path | None:
+    if raw_source_root is None:
+        return None
+    source_root = Path(raw_source_root).resolve(strict=True)
+    if not source_root.is_dir():
+        raise AssertionError(f"source root is not a directory: {source_root}")
+    sys.path.insert(0, os.fspath(source_root))
+    return source_root
+
+
+def _assert_import_origin(imported: ModuleType, source_root: Path | None) -> None:
+    if source_root is None:
+        return
+    raw_origin = getattr(imported, "__file__", None)
+    if not isinstance(raw_origin, str):
+        raise AssertionError(f"source import has no file origin: {imported.__name__}")
+    origin = Path(raw_origin).resolve(strict=True)
+    expected_package = source_root / _PACKAGE_ROOT
+    try:
+        origin.relative_to(expected_package)
+    except ValueError:
+        raise AssertionError(
+            f"{imported.__name__} came from {origin}, not {expected_package}"
+        ) from None
+
+
 def _parse_arguments() -> argparse.Namespace:
     parser = argparse.ArgumentParser()
     parser.add_argument("module")
@@ -170,6 +196,10 @@ def _parse_arguments() -> argparse.Namespace:
         default=[],
         help="Fail when this path or one of its children occurs on sys.path.",
     )
+    parser.add_argument(
+        "--source-root",
+        help="Explicit resolved src root for an isolated source-tree probe.",
+    )
     return parser.parse_args()
 
 
@@ -177,14 +207,17 @@ def main() -> int:
     arguments = _parse_arguments()
     module_name = cast(str, arguments.module)
     forbidden_paths = cast(list[str], arguments.forbid_path)
+    raw_source_root = cast(str | None, arguments.source_root)
     if module_name != _PACKAGE_ROOT and not module_name.startswith(f"{_PACKAGE_ROOT}."):
         raise ValueError(f"probe is restricted to {_PACKAGE_ROOT} modules")
 
     _assert_forbidden_paths_absent(forbidden_paths)
+    source_root = _bootstrap_source_root(raw_source_root)
     before = set(sys.modules)
     imported = _import_with_guards(module_name)
     after = set(sys.modules)
     _assert_no_external_imports(before, after)
+    _assert_import_origin(imported, source_root)
 
     if imported.__name__ != module_name:
         raise AssertionError(f"requested {module_name}, imported {imported.__name__}")

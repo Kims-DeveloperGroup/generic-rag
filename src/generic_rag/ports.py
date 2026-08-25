@@ -20,6 +20,7 @@ __all__ = (
     "Borrowed",
     "Embedder",
     "VectorIndexWriter",
+    "VectorIndexResetter",
     "VectorIndexReader",
     "LexicalRetriever",
 )
@@ -78,6 +79,15 @@ class VectorIndexWriter(Protocol):
 
     def delete_document(self, document: DocumentKey, /) -> None:
         """Delete every derived revision for a stable document key."""
+        ...
+
+
+@runtime_checkable
+class VectorIndexResetter(Protocol):
+    """Synchronously removes every projected document for one corpus."""
+
+    def reset_corpus(self, corpus_id: str, /) -> None:
+        """Remove the complete derived vector projection for the corpus."""
         ...
 
 
