@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import hashlib
 from collections.abc import Callable
 from dataclasses import dataclass
 from enum import StrEnum
@@ -38,6 +37,12 @@ from .errors import (
     StateCompatibilityError,
 )
 from .ports import Borrowed, Embedder, VectorIndexResetter, VectorIndexWriter
+from .projection_integrity import (
+    derive_fragment_id,
+    derive_projection_checkpoint_token,
+    derive_source_digest,
+    has_valid_projection_checkpoint,
+)
 
 __all__ = (
     "ProjectionFailureStage",
@@ -46,10 +51,6 @@ __all__ = (
     "project_documents",
     "rebuild_projection",
 )
-
-_SOURCE_DIGEST_DOMAIN = "generic-rag:projection-source:v1"
-_FRAGMENT_ID_DOMAIN = "generic-rag:fragment-id:v1"
-_CHECKPOINT_DOMAIN = "generic-rag:projection-checkpoint:v1"
 
 
 class ProjectionFailureStage(StrEnum):
@@ -264,85 +265,6 @@ def _validate_borrowed(name: str, value: object) -> None:
     _require_exact_type(name, value, Borrowed)
 
 
-def _sha256_fields(fields: tuple[str, ...]) -> str:
-    digest = hashlib.sha256()
-    for field in fields:
-        encoded = field.encode("utf-8", "surrogatepass")
-        digest.update(len(encoded).to_bytes(8, "big", signed=False))
-        digest.update(encoded)
-    return f"sha256:{digest.hexdigest()}"
-
-
-def _source_digest(document: Document) -> str:
-    fields = [
-        _SOURCE_DIGEST_DOMAIN,
-        "text",
-        document.text,
-        "attributes_count",
-        str(len(document.attributes)),
-    ]
-    for key, value in document.attributes:
-        fields.extend(("attribute_key", key, "attribute_value", value))
-    return _sha256_fields(tuple(fields))
-
-
-def _fragment_id(document: DocumentIdentity, start: int, end: int) -> str:
-    return _sha256_fields(
-        (
-            _FRAGMENT_ID_DOMAIN,
-            "corpus_id",
-            document.key.corpus_id,
-            "document_id",
-            document.key.document_id,
-            "revision_id",
-            document.revision_id,
-            "start",
-            str(start),
-            "end",
-            str(end),
-        )
-    )
-
-
-def _checkpoint_token(
-    corpus_id: str,
-    projection: ProjectionIdentity,
-    chunking: ChunkingPolicy,
-    entries: tuple[ProjectionManifestEntry, ...],
-) -> str:
-    fields = [
-        _CHECKPOINT_DOMAIN,
-        "corpus_id",
-        corpus_id,
-        "schema_id",
-        projection.schema_id,
-        "embedding_model_id",
-        projection.embedding.model_id,
-        "embedding_dimensions",
-        str(projection.embedding.dimensions),
-        "max_fragment_codepoints",
-        str(chunking.max_fragment_codepoints),
-        "overlap_codepoints",
-        str(chunking.overlap_codepoints),
-        "entry_count",
-        str(len(entries)),
-    ]
-    for entry in entries:
-        fields.extend(
-            (
-                "document_id",
-                entry.document.key.document_id,
-                "revision_id",
-                entry.document.revision_id,
-                "source_digest",
-                entry.source_digest,
-                "fragment_count",
-                str(entry.fragment_count),
-            )
-        )
-    return _sha256_fields(tuple(fields))
-
-
 def _fragments(document: Document, chunking: ChunkingPolicy) -> tuple[Fragment, ...]:
     fragments: list[Fragment] = []
     start = 0
@@ -351,7 +273,7 @@ def _fragments(document: Document, chunking: ChunkingPolicy) -> tuple[Fragment, 
         end = min(start + chunking.max_fragment_codepoints, text_length)
         identity = FragmentIdentity(
             document.identity,
-            _fragment_id(document.identity, start, end),
+            derive_fragment_id(document.identity, start, end),
             start,
             end,
         )
@@ -374,7 +296,7 @@ def _prepare_target(request: ProjectionRequest) -> _PreparedTarget:
         fragments = _fragments(document, request.chunking)
         entry = ProjectionManifestEntry(
             document.identity,
-            _source_digest(document),
+            derive_source_digest(document),
             len(fragments),
         )
         prepared.append(_PreparedDocument(document, fragments, entry))
@@ -382,7 +304,7 @@ def _prepare_target(request: ProjectionRequest) -> _PreparedTarget:
     checkpoint = ProjectionCheckpoint(
         request.corpus_id,
         request.projection,
-        _checkpoint_token(
+        derive_projection_checkpoint_token(
             request.corpus_id,
             request.projection,
             request.chunking,
@@ -399,16 +321,6 @@ def _prepare_target(request: ProjectionRequest) -> _PreparedTarget:
     return _PreparedTarget(request, tuple(prepared), manifest)
 
 
-def _has_valid_checkpoint(manifest: ProjectionManifest) -> bool:
-    expected = _checkpoint_token(
-        manifest.corpus_id,
-        manifest.projection,
-        manifest.chunking,
-        manifest.entries,
-    )
-    return manifest.checkpoint.token == expected
-
-
 def _state_status(
     state: ProjectionStateSnapshot,
     target: _PreparedTarget,
@@ -420,7 +332,7 @@ def _state_status(
 
     manifest = state.manifest
     assert manifest is not None
-    if not _has_valid_checkpoint(manifest):
+    if not has_valid_projection_checkpoint(manifest):
         return ProjectionStateStatus.CORRUPT
     if manifest.corpus_id != target.request.corpus_id:
         return ProjectionStateStatus.CORRUPT

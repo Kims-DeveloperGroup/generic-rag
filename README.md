@@ -3,12 +3,13 @@
 `generic-rag` is a provider-neutral, runtime-dependency-free foundation for
 retrieval-augmented generation (RAG). Version 0.1.0 requires Python 3.11 or
 later and provides immutable contracts, typed error categories, synchronous
-collaborator protocols, deterministic bounded projection orchestration, and
-explicit caller-owned borrowing.
+collaborator protocols, deterministic bounded projection orchestration,
+semantic retrieval, rank-based hybrid retrieval, and explicit caller-owned
+borrowing.
 
-Retrieval and result composition are not implemented in 0.1.0. The package has
-no built-in adapter, provider, factory, persistence, network client,
-configuration system, authentication, citation mechanism, or CLI.
+The package has no built-in adapter, provider, factory, persistence, network
+client, configuration system, authentication, authorization, citation
+mechanism, or CLI.
 
 ## Install from a checkout
 
@@ -107,12 +108,23 @@ explicit corpus-wide reset is intended. See the [projection guide](docs/projecti
 for the complete lifecycle, state matrix, adapter obligations, and failure
 behavior.
 
+Load the corresponding published manifest before retrieval, reauthorize each
+query and source in the host, and call `retrieve_semantic` or
+`retrieve_hybrid` with borrowed provider implementations. Returned fragment
+text is non-authoritative: resolve each identity against the still-authorized
+source revision and create host-owned citations before showing results to a
+user or injecting bounded context into an agent. See the [retrieval
+guide](docs/retrieval.md) for an executable independent-consumer example,
+deterministic fusion behavior, outcome handling, and the complete host flow.
+
 Public values must be imported from their owning modules:
 
 - `generic_rag.contracts`
 - `generic_rag.errors`
 - `generic_rag.ports`
 - `generic_rag.projection`
+- `generic_rag.projection_integrity`
+- `generic_rag.retrieval`
 
 The package root intentionally has no re-exports: `generic_rag.__all__ == ()`.
 See the [API reference](docs/api.md) for every supported name and invariant.
@@ -129,19 +141,20 @@ shown to a user or supplied to a downstream tool or agent.
   policy, embeds ordered fragment text, replaces or deletes complete document
   projections, and returns a manifest and truthful receipt for caller-owned
   persistence.
-- [Issue #4](https://github.com/Kims-DeveloperGroup/generic-rag/issues/4) is
-  planned to add retrieval and composition. Its intended responsibility is to
-  use an injected `Embedder` and `VectorIndexReader` for semantic candidates
-  and an injected `LexicalRetriever` for lexical candidates, then define
-  deduplication, fusion, limiting, and outcome behavior. Provider rank will be
-  the input; raw provider scores are not represented or assumed comparable.
+- Retrieval accepts the matching caller-loaded published state and injected
+  semantic or lexical providers. It validates and filters current-revision
+  candidates, deduplicates exact identities, and returns bounded score-free
+  hits. Hybrid retrieval fuses provider ranks deterministically; it does not
+  compare raw provider scores.
+- The host reauthorizes every query, resolves each returned fragment identity
+  against authoritative source data, verifies the exact source slice, and
+  creates citations. It may then show cited results to a user or inject bounded
+  cited context into an agent; the agent must retain those citations.
 
-There is no end-user or agent query workflow yet. A consuming application can
-project data now, but must wait for or implement a separate reviewed retrieval
-layer before supplying retrieved context to users, tools, or agents. The
-caller/provider ownership model remains explicit throughout. See [resource
-lifecycle](docs/lifecycle.md) and
-[security and privacy](docs/security-and-privacy.md).
+The package does not decide provider selection, authentication, authorization,
+prompt or tool policy, retry, display, logging, or resource lifecycle. See the
+[retrieval guide](docs/retrieval.md), [resource lifecycle](docs/lifecycle.md),
+and [security and privacy](docs/security-and-privacy.md).
 
 ## Compatibility
 
@@ -150,10 +163,11 @@ assume compatibility across minor releases. For this release, direct imports
 from the documented owning modules are the supported public paths; root-level
 imports are not.
 
-The distribution includes `py.typed`. The wheel contains exactly the five
+The distribution includes `py.typed`. The wheel contains exactly the seven
 importable modules `generic_rag`, `generic_rag.errors`,
-`generic_rag.contracts`, `generic_rag.ports`, and `generic_rag.projection`, plus
-the typing marker.
+`generic_rag.contracts`, `generic_rag.ports`, `generic_rag.projection`,
+`generic_rag.projection_integrity`, and `generic_rag.retrieval`, plus the typing
+marker.
 
 ## Development verification
 

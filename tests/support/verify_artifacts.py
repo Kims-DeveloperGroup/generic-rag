@@ -17,6 +17,8 @@ _PACKAGE_FILES = {
     "generic_rag/errors.py",
     "generic_rag/ports.py",
     "generic_rag/projection.py",
+    "generic_rag/projection_integrity.py",
+    "generic_rag/retrieval.py",
 }
 _PACKAGE_DATA = {"generic_rag/py.typed"}
 

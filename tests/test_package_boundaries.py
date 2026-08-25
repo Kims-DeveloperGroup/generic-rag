@@ -17,6 +17,8 @@ import generic_rag.contracts as contracts
 import generic_rag.errors as errors
 import generic_rag.ports as ports
 import generic_rag.projection as projection
+import generic_rag.projection_integrity as projection_integrity
+import generic_rag.retrieval as retrieval
 
 _PROJECT_ROOT = Path(__file__).resolve().parents[1]
 _SOURCE_ROOT = _PROJECT_ROOT / "src"
@@ -28,6 +30,8 @@ _EXPECTED_SOURCES = {
     "generic_rag.errors": "src/generic_rag/errors.py",
     "generic_rag.ports": "src/generic_rag/ports.py",
     "generic_rag.projection": "src/generic_rag/projection.py",
+    "generic_rag.projection_integrity": ("src/generic_rag/projection_integrity.py"),
+    "generic_rag.retrieval": "src/generic_rag/retrieval.py",
 }
 _EXPECTED_DEPENDENCIES = {
     "generic_rag": set(),
@@ -38,6 +42,17 @@ _EXPECTED_DEPENDENCIES = {
         "generic_rag.contracts",
         "generic_rag.errors",
         "generic_rag.ports",
+        "generic_rag.projection_integrity",
+    },
+    "generic_rag.projection_integrity": {
+        "generic_rag.contracts",
+        "generic_rag.errors",
+    },
+    "generic_rag.retrieval": {
+        "generic_rag.contracts",
+        "generic_rag.errors",
+        "generic_rag.ports",
+        "generic_rag.projection_integrity",
     },
 }
 _EXPECTED_EXPORTS = {
@@ -70,6 +85,7 @@ _EXPECTED_EXPORTS = {
         "ProjectionStateSnapshot",
         "ProjectionStateStatus",
         "ProjectionResult",
+        "RetrievalLimits",
         "RetrievalQuery",
         "RetrievalOutcome",
         "RetrievalHit",
@@ -89,6 +105,16 @@ _EXPECTED_EXPORTS = {
         "ProjectionOperationError",
         "project_documents",
         "rebuild_projection",
+    ),
+    "generic_rag.projection_integrity": (
+        "derive_source_digest",
+        "derive_fragment_id",
+        "derive_projection_checkpoint_token",
+        "has_valid_projection_checkpoint",
+    ),
+    "generic_rag.retrieval": (
+        "retrieve_semantic",
+        "retrieve_hybrid",
     ),
 }
 
@@ -166,6 +192,7 @@ class PackageBoundaryTests(unittest.TestCase):
             for path in _production_sources()
         }
 
+        self.assertEqual(len(actual), 7)
         self.assertEqual(actual, _EXPECTED_SOURCES)
 
     def test_supported_exports_are_exact_and_owned(self) -> None:
@@ -175,6 +202,8 @@ class PackageBoundaryTests(unittest.TestCase):
             "generic_rag.contracts": contracts,
             "generic_rag.ports": ports,
             "generic_rag.projection": projection,
+            "generic_rag.projection_integrity": projection_integrity,
+            "generic_rag.retrieval": retrieval,
         }
 
         for module_name, expected_exports in _EXPECTED_EXPORTS.items():
@@ -190,6 +219,8 @@ class PackageBoundaryTests(unittest.TestCase):
             *_EXPECTED_EXPORTS["generic_rag.contracts"],
             *_EXPECTED_EXPORTS["generic_rag.ports"],
             *_EXPECTED_EXPORTS["generic_rag.projection"],
+            *_EXPECTED_EXPORTS["generic_rag.projection_integrity"],
+            *_EXPECTED_EXPORTS["generic_rag.retrieval"],
         ):
             with self.subTest(root_reexport=name):
                 self.assertFalse(hasattr(generic_rag, name))
@@ -210,6 +241,7 @@ class PackageBoundaryTests(unittest.TestCase):
             for module_name, relative_path in _EXPECTED_SOURCES.items()
         }
 
+        self.assertEqual(sum(map(len, actual.values())), 12)
         self.assertEqual(actual, _EXPECTED_DEPENDENCIES)
         root_tree = _syntax_tree(_PROJECT_ROOT / _EXPECTED_SOURCES["generic_rag"])
         root_imports = [

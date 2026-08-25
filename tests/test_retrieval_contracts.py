@@ -13,6 +13,7 @@ from generic_rag.contracts import (
     Fragment,
     FragmentIdentity,
     RetrievalHit,
+    RetrievalLimits,
     RetrievalOutcome,
     RetrievalQuery,
     RetrievalResult,
@@ -72,6 +73,10 @@ def _query(
 class RetrievalContractTests(unittest.TestCase):
     def test_retrieval_fields_are_exact_frozen_and_slotted(self) -> None:
         self.assertEqual(
+            tuple(field.name for field in fields(RetrievalLimits)),
+            ("max_query_codepoints",),
+        )
+        self.assertEqual(
             tuple(field.name for field in fields(RetrievalQuery)),
             ("corpus_id", "text", "hit_limit", "candidate_limit"),
         )
@@ -84,6 +89,7 @@ class RetrievalContractTests(unittest.TestCase):
             ("query", "outcome", "hits", "truncated"),
         )
 
+        limits = RetrievalLimits(100)
         query = _query()
         hit = RetrievalHit(_fragment("fragment"), 1)
         result = RetrievalResult(
@@ -93,6 +99,7 @@ class RetrievalContractTests(unittest.TestCase):
             False,
         )
         for instance, field_name in (
+            (limits, "max_query_codepoints"),
             (query, "text"),
             (hit, "rank"),
             (result, "truncated"),
@@ -102,6 +109,20 @@ class RetrievalContractTests(unittest.TestCase):
                 with self.assertRaises(FrozenInstanceError):
                     setattr(instance, field_name, object())
                 self.assertIsInstance(hash(instance), int)
+
+    def test_retrieval_limits_are_independent_positive_exact_integers(self) -> None:
+        limits = RetrievalLimits(max_query_codepoints=7)
+
+        self.assertEqual(limits.max_query_codepoints, 7)
+        self.assertNotIn("hit_limit", inspect.signature(RetrievalLimits).parameters)
+        self.assertNotIn(
+            "candidate_limit",
+            inspect.signature(RetrievalLimits).parameters,
+        )
+        for invalid in (0, -1, True, 1.0, _IntegerSubclass(1)):
+            with self.subTest(value=invalid):
+                with self.assertRaises(ContractValidationError):
+                    RetrievalLimits(cast(int, invalid))
 
     def test_retrieval_outcomes_are_exact_closed_string_enums(self) -> None:
         self.assertEqual(
