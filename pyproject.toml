@@ -1,0 +1,53 @@
+[build-system]
+requires = ["setuptools>=83,<85"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "generic-rag"
+version = "0.1.0"
+description = "Provider-neutral, dependency-free RAG projection and retrieval runtime"
+readme = "README.md"
+requires-python = ">=3.11"
+dependencies = []
+
+[dependency-groups]
+build = [
+    "build>=1.5,<2",
+    "setuptools>=83,<85",
+]
+lint = [
+    "ruff>=0.16,<0.17",
+]
+type = [
+    "mypy>=2.3,<3",
+]
+dev = [
+    { include-group = "build" },
+    { include-group = "lint" },
+    { include-group = "type" },
+]
+test = []
+
+[tool.setuptools]
+package-dir = { "" = "src" }
+
+[tool.setuptools.packages.find]
+where = ["src"]
+include = ["generic_rag", "generic_rag.*"]
+
+[tool.setuptools.package-data]
+generic_rag = ["py.typed"]
+
+[tool.ruff]
+target-version = "py311"
+line-length = 88
+src = ["src"]
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "UP"]
+
+[tool.mypy]
+python_version = "3.11"
+strict = true
+mypy_path = "src"
+packages = ["generic_rag"]
