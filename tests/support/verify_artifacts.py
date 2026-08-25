@@ -16,6 +16,7 @@ _PACKAGE_FILES = {
     "generic_rag/contracts.py",
     "generic_rag/errors.py",
     "generic_rag/ports.py",
+    "generic_rag/projection.py",
 }
 _PACKAGE_DATA = {"generic_rag/py.typed"}
 

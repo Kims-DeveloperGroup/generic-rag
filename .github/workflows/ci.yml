@@ -162,7 +162,8 @@ jobs:
             generic_rag \
             generic_rag.errors \
             generic_rag.contracts \
-            generic_rag.ports
+            generic_rag.ports \
+            generic_rag.projection
           do
             (
               cd "$rag_probe_dir"
