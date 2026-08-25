@@ -31,6 +31,7 @@ __all__ = (
     "ProjectionStateSnapshot",
     "ProjectionStateStatus",
     "ProjectionResult",
+    "RetrievalLimits",
     "RetrievalQuery",
     "RetrievalOutcome",
     "RetrievalHit",
@@ -553,6 +554,16 @@ class ProjectionResult:
             raise ContractValidationError(
                 "unchanged results require current state and zero document attempts"
             )
+
+
+@dataclass(frozen=True, slots=True)
+class RetrievalLimits:
+    """Independent bound on caller-supplied retrieval query text."""
+
+    max_query_codepoints: int
+
+    def __post_init__(self) -> None:
+        _require_positive_integer("max_query_codepoints", self.max_query_codepoints)
 
 
 @dataclass(frozen=True, slots=True)

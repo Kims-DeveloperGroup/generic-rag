@@ -3,15 +3,16 @@
 Version 0.1.0 uses an explicit caller-owned lifecycle. The package defines
 collaborator protocols and `Borrowed[T]`; it does not acquire, configure,
 discover, persist, synchronize, or release provider resources. Projection calls
-borrowed collaborators only during an explicit workflow invocation. See the
-[API reference](api.md) for exact port signatures.
+and retrieval calls use borrowed collaborators only during an explicit
+workflow invocation. See the [API reference](api.md) for exact port signatures.
 
 ## Ownership rule
 
 The caller or provider integration owns every lifecycle decision:
 
-1. Acquire and configure the embedder, vector index, projection-state store,
-   and any required synchronization.
+1. Select, acquire, and configure the embedder, vector index, lexical
+   retriever, projection-state store, credentials, network clients, and any
+   required synchronization.
 2. Authorize the complete source set and construct a bounded
    `ProjectionRequest`.
 3. Wrap the application-owned collaborators in `Borrowed` and call
@@ -25,6 +26,12 @@ The caller or provider integration owns every lifecycle decision:
 `generic-rag` performs none of the acquisition, manifest persistence,
 publication, synchronization, or release steps implicitly. It provides no
 transaction across collaborators and the manifest store.
+
+For retrieval, the caller also loads the manifest paired with the index,
+reauthorizes the requester and source set for each query, applies retry and
+timeout policy around package calls, resolves returned identities against
+authoritative source revisions, creates citations, and decides whether cited
+results may be shown to a user or supplied to an agent.
 
 ## `Borrowed[T]`
 
@@ -40,9 +47,11 @@ has exactly these context semantics:
   provider health checks.
 
 These guarantees still apply if the wrapped provider defines its own context
-manager or lifecycle methods. Projection itself translates ordinary method
-failures into `ProjectionOperationError`; that workflow behavior does not
-change `Borrowed` semantics.
+manager or lifecycle methods. Projection translates ordinary method failures
+into `ProjectionOperationError`; retrieval represents an ordinary method
+failure as a content-free failed branch and may return independent validated
+hits from another branch. Those workflow behaviors do not change `Borrowed`
+semantics.
 
 ## Successful borrowed scope
 
@@ -106,11 +115,41 @@ published manifest cannot be used safely by the next incremental operation.
 See the [projection guide](projection.md) for the state matrix and destructive
 rebuild ordering.
 
-## Retrieval lifecycle is not implemented
+## Retrieval call scope
 
-The query and reader contracts do not create a package retrieval workflow.
-Retrieval and composition remain planned for Issue #4, and no user or agent
-query lifecycle is implied by the current projection API.
+`retrieve_semantic` and `retrieve_hybrid` receive exact `Borrowed` wrappers and
+a caller-loaded `ProjectionStateSnapshot`. As with projection, they enter only
+the no-op wrappers and never enter, close, or shut down the underlying provider
+objects. Keep every provider alive for the complete synchronous call.
+
+Semantic retrieval reads the embedder identity, embeds one query, and then
+searches the vector reader. Hybrid retrieval completes that semantic branch
+and then calls the lexical retriever; an ordinary semantic failure does not
+prevent the lexical call. The package does not retry. Ordinary provider
+exceptions and malformed returns produce a failed branch: the overall result
+is `failed` without hits or `partial` when the other branch supplies validated
+hits. An identity or revision mismatch similarly produces `stale` without hits
+or `partial` alongside another branch's hits. `BaseException` subclasses
+propagate through the no-op borrowed scope.
+
+The host owns the complete operating lifecycle around those calls:
+
+- persist and publish each manifest with the provider index it describes;
+- prevent projection, retrieval, rebuild, disable, and purge operations from
+  observing incompatible manifest/index combinations;
+- select and acquire providers, credentials, and network resources and apply
+  provider-specific retry, timeout, and fallback policy;
+- reauthorize each query and authoritative source, then revalidate returned
+  fragment identities and create citations;
+- interpret `complete`, `partial`, `unavailable`, `stale`, and `failed` under
+  application policy and record any required audit events; and
+- coordinate in-flight calls before disabling, rebuilding, purging, or shutting
+  down caller-owned state and resources.
+
+The package provides no daemon, background worker, registry, persistence,
+dynamic loading, network discovery, lock, transaction, purge command, or
+shutdown hook. See the [retrieval guide](retrieval.md) for the exact query flow
+and outcome meanings.
 
 Review the [security and privacy boundary](security-and-privacy.md) before
 passing content to any adapter implementation.

@@ -1,10 +1,11 @@
 # Public API
 
 Version 0.1.0 exposes immutable values, typed error categories, synchronous
-collaborator protocols, and deterministic bounded document projection. It does
-not expose retrieval or result-composition orchestration. See the [projection
-guide](projection.md), [resource lifecycle](lifecycle.md), and [security and
-privacy boundary](security-and-privacy.md) for the surrounding usage contract.
+collaborator protocols, deterministic bounded document projection, and
+score-free semantic and hybrid retrieval. See the [projection guide](projection.md),
+[retrieval guide](retrieval.md), [resource lifecycle](lifecycle.md), and
+[security and privacy boundary](security-and-privacy.md) for the surrounding
+usage contract.
 
 ## Import boundary
 
@@ -42,6 +43,7 @@ public symbols. Import names from their owning modules instead.
 - `ProjectionStateSnapshot`
 - `ProjectionStateStatus`
 - `ProjectionResult`
+- `RetrievalLimits`
 - `RetrievalQuery`
 - `RetrievalOutcome`
 - `RetrievalHit`
@@ -63,6 +65,18 @@ public symbols. Import names from their owning modules instead.
 - `ProjectionOperationError`
 - `project_documents`
 - `rebuild_projection`
+
+`generic_rag.projection_integrity` exports exactly:
+
+- `derive_source_digest`
+- `derive_fragment_id`
+- `derive_projection_checkpoint_token`
+- `has_valid_projection_checkpoint`
+
+`generic_rag.retrieval` exports exactly:
+
+- `retrieve_semantic`
+- `retrieve_hybrid`
 
 The package does not support importing any of these names from the package
 root.
@@ -127,6 +141,15 @@ An ordinary collaborator exception is chained as the operation error's cause.
 An invalid identity, malformed vector result, or non-`None` command result has
 no internal cause. `KeyboardInterrupt` and `SystemExit` pass through unchanged.
 
+Retrieval defines no workflow-specific public exception. Invalid top-level
+workflow inputs, including a query that exceeds `RetrievalLimits`, raise
+`ContractValidationError` before collaborator effects. After a collaborator
+boundary is entered, ordinary `Exception` failures and malformed collaborator
+returns contribute a content-free failure state. A failed branch contributes no
+fragment or exception text; a `PARTIAL` result can contain independently
+validated hits from another branch. No exception cause crosses the result
+boundary. `BaseException` subclasses pass through unchanged.
+
 ## Documents and fragments
 
 | Type | Fields | Construction rules |
@@ -173,6 +196,38 @@ canonical finite-float representation.
 The package produces manifests; the caller owns their persistence. Source
 digests, fragment IDs, and checkpoint tokens are deterministic under explicit
 v1 domains described in the [projection guide](projection.md#deterministic-projection-values).
+
+The public integrity functions are synchronous and positional-only:
+
+```python
+def derive_source_digest(document: Document, /) -> str: ...
+
+def derive_fragment_id(
+    document: DocumentIdentity,
+    start: int,
+    end: int,
+    /,
+) -> str: ...
+
+def derive_projection_checkpoint_token(
+    corpus_id: str,
+    projection: ProjectionIdentity,
+    chunking: ChunkingPolicy,
+    entries: tuple[ProjectionManifestEntry, ...],
+    /,
+) -> str: ...
+
+def has_valid_projection_checkpoint(
+    manifest: ProjectionManifest,
+    /,
+) -> bool: ...
+```
+
+They reproduce the same v1 integrity values used by projection and retrieval.
+They validate exact public contract shapes and canonical manifest-entry order;
+invalid inputs raise `ContractValidationError`. Checkpoint validation returns
+whether the supplied token equals the derived token. It does not inspect a
+provider index or establish authorization.
 
 ## Projection state and results
 
@@ -264,6 +319,7 @@ failure matrices.
 
 | Type | Fields | Construction rules |
 | --- | --- | --- |
+| `RetrievalLimits` | `max_query_codepoints: int` | The query-text cap is a positive exact integer. |
 | `RetrievalQuery` | `corpus_id: str`, `text: str`, `hit_limit: int`, `candidate_limit: int` | Corpus and text are nonblank exact strings; limits are positive exact integers and `hit_limit <= candidate_limit`. Values are preserved exactly. |
 | `RetrievalHit` | `fragment: Fragment`, `rank: int` | Fragment requires its exact class and rank is a positive exact integer. There is no score field. |
 | `RetrievalResult` | `query: RetrievalQuery`, `outcome: RetrievalOutcome`, `hits: tuple[RetrievalHit, ...]`, `truncated: bool` | Nested values, the hit tuple, and the boolean require exact types. Hit count cannot exceed `query.hit_limit`. |
@@ -274,12 +330,12 @@ ranks are contiguous from one, fragment identities are unique, and every
 fragment belongs to the query corpus. `PARTIAL` requires at least one hit;
 `UNAVAILABLE`, `STALE`, and `FAILED` require no hits and `truncated=False`.
 
-`truncated=True` is the caller's explicit assertion that otherwise valid work
-or results were cut by the query budget. Hits and reader ports are score-free;
-raw provider scores are neither represented nor promised comparable.
-
-These are value contracts only. Version 0.1.0 has no package retrieval,
-composition, citation, user, tool, or agent workflow.
+The workflows set `truncated=True` exactly when validated, unique,
+current-revision candidates exceed `query.hit_limit`. Hits and reader ports are
+score-free; raw provider scores are neither represented nor promised
+comparable. When constructing a `RetrievalResult` directly, callers remain
+responsible for supplying a truthful `truncated` value because the value
+contract cannot reconstruct discarded candidates.
 
 ## Collaborator ports
 
@@ -302,12 +358,50 @@ Projection enforces the embedder result rules and requires each writer or
 resetter command to return exactly `None`. It cannot enforce external storage,
 atomicity, authorization, concurrency, or lifecycle behavior.
 
+Retrieval checks its embedder identity and output, provider tuple types and
+candidate bounds, fragment integrity, corpus and published revisions, and
+cross-provider identity consistency. The caller still owns provider selection,
+authorization, persistence, concurrency, retries, and authoritative source
+validation.
+
 `Borrowed[T]` is the companion ownership marker, not a provider port. Its exact
 behavior is documented in [resource lifecycle](lifecycle.md).
 
-## Planned retrieval workflow
+## Retrieval workflows
 
-Retrieval and composition remain planned for Issue #4. The existing query,
-result, reader, and lexical contracts do not promise an implemented workflow,
-fusion algorithm, compatibility check, exception mapping, citation policy, or
-user/agent integration.
+Both public functions are synchronous and all parameters are positional-only:
+
+```python
+def retrieve_semantic(
+    query: RetrievalQuery,
+    state: ProjectionStateSnapshot,
+    limits: RetrievalLimits,
+    embedder: Borrowed[Embedder],
+    vector_reader: Borrowed[VectorIndexReader],
+    /,
+) -> RetrievalResult: ...
+
+def retrieve_hybrid(
+    query: RetrievalQuery,
+    state: ProjectionStateSnapshot,
+    limits: RetrievalLimits,
+    embedder: Borrowed[Embedder],
+    vector_reader: Borrowed[VectorIndexReader],
+    lexical_retriever: Borrowed[LexicalRetriever],
+    /,
+) -> RetrievalResult: ...
+```
+
+Semantic retrieval embeds the query once, validates at most
+`candidate_limit` vector candidates, preserves provider order through
+current-revision filtering, and returns at most `hit_limit` hits. Hybrid
+retrieval also obtains at most `candidate_limit` lexical candidates, preserves
+each provider's original ranks, and fuses exact identities using deterministic
+reciprocal rank fusion with offset 60. It uses provider ranks rather than raw
+scores and applies opaque identity ordering to ties.
+
+The workflows return `complete`, `partial`, `unavailable`, `stale`, or `failed`
+according to published-state and collaborator results. They do not authorize,
+cite, persist, log, retry, or manage collaborator resources. See the
+[retrieval guide](retrieval.md) for candidate validation, exact outcome
+handling, deterministic fusion, and the required user and agent host flow.

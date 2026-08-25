@@ -5,9 +5,11 @@ deterministic vector projection. It supplies orchestration, contracts, and
 failure reporting; the caller supplies and owns the embedder, vector index,
 projection-state persistence, authorization policy, and synchronization.
 
-Projection does not make content retrievable through this package. Retrieval,
-result composition, and user or agent integration remain planned for [Issue
-#4](https://github.com/Kims-DeveloperGroup/generic-rag/issues/4).
+Projection establishes the published manifest and derived vector index that
+retrieval validates. The host must publish and load those as one matching
+logical state, then reauthorize queries and authoritative sources. See the
+[retrieval guide](retrieval.md) for semantic and hybrid use; neither workflow
+implements authentication, authorization, citations, or user/agent policy.
 
 ## Required adapters and state
 
@@ -221,6 +223,14 @@ future package version will retain the same algorithm or accept an old
 manifest. Consumers that persist projection state should pin and review the
 package version and use explicit rebuild for an incompatible upgrade.
 
+The positional-only public helpers `derive_source_digest`,
+`derive_fragment_id`, `derive_projection_checkpoint_token`, and
+`has_valid_projection_checkpoint` live in
+`generic_rag.projection_integrity`. Projection and retrieval call the same
+helpers; hosts may use them to construct or validate published state. They
+validate contract structure but do not inspect provider storage. See the [API
+reference](api.md) for their exact signatures.
+
 Hashes are deterministic comparison and identity values, not encryption,
 authorization, or a proof of source ownership. See [security and
 privacy](security-and-privacy.md).
@@ -253,5 +263,6 @@ The public error messages do not include document or vector content. Adapter
 exception messages remain reachable through exception chaining, so adapters
 and application logging must avoid disclosing sensitive values.
 
-See the [API reference](api.md) for exact signatures and value invariants and
-[resource lifecycle](lifecycle.md) for ownership details.
+See the [API reference](api.md) for exact signatures and value invariants,
+[resource lifecycle](lifecycle.md) for ownership details, and the [retrieval
+guide](retrieval.md) for consuming a successfully published projection.
