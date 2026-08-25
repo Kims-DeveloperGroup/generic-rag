@@ -19,7 +19,6 @@ jobs:
           - "3.11"
           - "3.14"
     env:
-      UV_PROJECT_ENVIRONMENT: ${{ runner.temp }}/generic-rag-venv-${{ matrix.python-version }}
       MATRIX_PYTHON: ${{ matrix.python-version }}
 
     steps:
@@ -37,6 +36,13 @@ jobs:
         uses: astral-sh/setup-uv@20cfd1bf945f4377ade1205e4dbc17946fc9a30d
         with:
           version: "0.12.5"
+
+      - name: Configure external uv environment
+        run: |
+          set -euo pipefail
+          printf 'UV_PROJECT_ENVIRONMENT=%s\n' \
+            "$RUNNER_TEMP/generic-rag-venv-$MATRIX_PYTHON" \
+            >> "$GITHUB_ENV"
 
       - name: Verify locked environment
         run: |
