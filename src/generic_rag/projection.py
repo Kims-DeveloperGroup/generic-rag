@@ -743,7 +743,10 @@ def project_documents(
     writer: Borrowed[VectorIndexWriter],
     /,
 ) -> ProjectionResult:
-    """Incrementally project a valid present snapshot to a complete target."""
+    """Project a compatible present state to the complete target.
+
+    Incompatible state raises ``ProjectionStateError`` before collaborator effects.
+    """
 
     canonical_request = _validate_request(request)
     canonical_state = _validate_state(state)
