@@ -1,0 +1,174 @@
+name: CI
+
+on:
+  pull_request:
+  push:
+
+permissions:
+  contents: read
+
+jobs:
+  verify:
+    name: Python ${{ matrix.python-version }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    strategy:
+      fail-fast: false
+      matrix:
+        python-version:
+          - "3.11"
+          - "3.14"
+    env:
+      MATRIX_PYTHON: ${{ matrix.python-version }}
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          persist-credentials: false
+
+      - name: Set up Python
+        uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97
+        with:
+          python-version: ${{ matrix.python-version }}
+
+      - name: Set up uv
+        uses: astral-sh/setup-uv@20cfd1bf945f4377ade1205e4dbc17946fc9a30d
+        with:
+          version: "0.12.5"
+
+      - name: Configure external uv environment
+        run: |
+          set -euo pipefail
+          printf 'UV_PROJECT_ENVIRONMENT=%s\n' \
+            "$RUNNER_TEMP/generic-rag-venv-$MATRIX_PYTHON" \
+            >> "$GITHUB_ENV"
+
+      - name: Verify locked environment
+        run: |
+          set -euo pipefail
+          uv lock --check
+          uv sync --locked --all-groups --python "$MATRIX_PYTHON"
+
+      - name: Run unit and boundary tests
+        run: |
+          set -euo pipefail
+          uv run --frozen python -m unittest discover \
+            -s tests \
+            -p 'test_*.py' \
+            -v
+
+      - name: Run lint and format checks
+        if: matrix.python-version == '3.11'
+        run: |
+          set -euo pipefail
+          uv run --frozen ruff check src tests
+          uv run --frozen ruff format --check src tests
+
+      - name: Run strict type checks
+        if: matrix.python-version == '3.11'
+        run: |
+          set -euo pipefail
+          uv run --frozen mypy --strict src tests
+
+      - name: Compile source and tests
+        if: matrix.python-version == '3.11'
+        env:
+          PYTHONPYCACHEPREFIX: ${{ runner.temp }}/generic-rag-pycache
+        run: |
+          set -euo pipefail
+          uv run --frozen python -m compileall -q src tests
+
+      - name: Build and verify clean distributions
+        if: matrix.python-version == '3.11'
+        run: |
+          set -euo pipefail
+
+          rag_dist_dir="$RUNNER_TEMP/generic-rag-dist"
+          rag_extract_dir="$RUNNER_TEMP/generic-rag-sdist"
+          rag_rebuilt_dir="$RUNNER_TEMP/generic-rag-rebuilt"
+          rag_install_env="$RUNNER_TEMP/generic-rag-clean-venv"
+          rag_probe_dir="$RUNNER_TEMP/generic-rag-probe"
+
+          mkdir -p \
+            "$rag_dist_dir" \
+            "$rag_extract_dir" \
+            "$rag_rebuilt_dir" \
+            "$rag_probe_dir"
+
+          uv run --frozen python -m build \
+            --no-isolation \
+            --outdir "$rag_dist_dir"
+          uv run --frozen python tests/support/verify_artifacts.py \
+            "$rag_dist_dir"
+
+          rag_sdist_path="$(
+            find "$rag_dist_dir" \
+              -maxdepth 1 \
+              -type f \
+              -name '*.tar.gz' \
+              -print \
+              -quit
+          )"
+          test -n "$rag_sdist_path"
+          uv run --frozen python -m tarfile \
+            -e "$rag_sdist_path" "$rag_extract_dir"
+
+          rag_source_root="$(
+            find "$rag_extract_dir" \
+              -mindepth 1 \
+              -maxdepth 1 \
+              -type d \
+              -print \
+              -quit
+          )"
+          test -n "$rag_source_root"
+          uv run --frozen python -m build \
+            --wheel \
+            --no-isolation \
+            --outdir "$rag_rebuilt_dir" \
+            "$rag_source_root"
+
+          rag_rebuilt_wheel="$(
+            find "$rag_rebuilt_dir" \
+              -maxdepth 1 \
+              -type f \
+              -name '*.whl' \
+              -print \
+              -quit
+          )"
+          test -n "$rag_rebuilt_wheel"
+
+          python -m venv "$rag_install_env"
+          rag_clean_python="$rag_install_env/bin/python"
+          "$rag_clean_python" -m pip install \
+            --no-index \
+            --no-deps \
+            "$rag_rebuilt_wheel"
+          "$rag_clean_python" -m pip check
+
+          (
+            cd "$rag_probe_dir"
+            "$rag_clean_python" -I -B - <<'PY'
+          from importlib import metadata, resources
+
+          assert metadata.version("generic-rag") == "0.1.0"
+          assert not metadata.requires("generic-rag")
+          assert resources.files("generic_rag").joinpath("py.typed").is_file()
+          PY
+          )
+
+          for rag_module in \
+            generic_rag \
+            generic_rag.errors \
+            generic_rag.contracts \
+            generic_rag.ports
+          do
+            (
+              cd "$rag_probe_dir"
+              "$rag_clean_python" -I -B \
+                "$GITHUB_WORKSPACE/tests/support/clean_import_probe.py" \
+                "$rag_module" \
+                --forbid-path "$GITHUB_WORKSPACE"
+            )
+          done
